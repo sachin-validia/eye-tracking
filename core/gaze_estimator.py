@@ -135,7 +135,7 @@ class GazeEstimator:
         [640, 0, 320],
         [0, 640, 240],
         [0, 0, 1]
-    ], dtype=float)
+    ], dtype=np.float32)
     
     def __init__(self, config: Optional[Config] = None):
         """Initialize gaze estimator"""
@@ -155,7 +155,7 @@ class GazeEstimator:
         
         # Camera parameters (to be calibrated)
         self.camera_matrix = self.DEFAULT_CAMERA_MATRIX.copy()
-        self.dist_coeffs = np.zeros(5)
+        self.dist_coeffs = np.zeros(5, dtype=np.float32)
         
         # 3D face model points for head pose estimation
         self.face_model_points = np.array([
@@ -165,7 +165,7 @@ class GazeEstimator:
             (225.0, 170.0, -135.0),    # Right eye corner
             (-150.0, -150.0, -125.0),  # Left mouth corner
             (150.0, -150.0, -125.0)    # Right mouth corner
-        ], dtype=float) / 4.5
+        ], dtype=np.float32) / 4.5
         
         logger.info("Gaze estimator initialized")
     
@@ -254,13 +254,13 @@ class GazeEstimator:
         """Estimate head pose using PnP algorithm"""
         # Select key facial points
         image_points = np.array([
-            face_landmarks.landmarks[1],    # Nose tip
-            face_landmarks.landmarks[152],  # Chin
-            face_landmarks.landmarks[33],   # Left eye corner
-            face_landmarks.landmarks[263],  # Right eye corner
-            face_landmarks.landmarks[61],   # Left mouth corner
-            face_landmarks.landmarks[291]   # Right mouth corner
-        ], dtype=float)[:, :2]  # Use only x, y
+            face_landmarks.landmarks[1, :2],    # Nose tip
+            face_landmarks.landmarks[152, :2],  # Chin
+            face_landmarks.landmarks[33, :2],   # Left eye corner
+            face_landmarks.landmarks[263, :2],  # Right eye corner
+            face_landmarks.landmarks[61, :2],   # Left mouth corner
+            face_landmarks.landmarks[291, :2]   # Right mouth corner
+        ], dtype=np.float32)
         
         # Solve PnP
         success, rotation_vector, translation_vector = cv2.solvePnP(
@@ -276,15 +276,25 @@ class GazeEstimator:
         
         # Convert rotation vector to Euler angles
         rotation_matrix, _ = cv2.Rodrigues(rotation_vector)
-        pose_matrix = cv2.hconcat((rotation_matrix, translation_vector))
-        _, _, _, _, _, _, euler_angles = cv2.decomposeProjectionMatrix(
-            cv2.vconcat((pose_matrix, np.array([[0, 0, 0, 1]])))
-        )
+        
+        # Calculate Euler angles from rotation matrix
+        sy = np.sqrt(rotation_matrix[0, 0] * rotation_matrix[0, 0] + rotation_matrix[1, 0] * rotation_matrix[1, 0])
+        
+        singular = sy < 1e-6
+        
+        if not singular:
+            x = np.arctan2(rotation_matrix[2, 1], rotation_matrix[2, 2])
+            y = np.arctan2(-rotation_matrix[2, 0], sy)
+            z = np.arctan2(rotation_matrix[1, 0], rotation_matrix[0, 0])
+        else:
+            x = np.arctan2(-rotation_matrix[1, 2], rotation_matrix[1, 1])
+            y = np.arctan2(-rotation_matrix[2, 0], sy)
+            z = 0
         
         return {
-            'pitch': euler_angles[0][0],
-            'yaw': euler_angles[1][0],
-            'roll': euler_angles[2][0],
+            'pitch': np.degrees(x),
+            'yaw': np.degrees(y),
+            'roll': np.degrees(z),
             'rotation_vector': rotation_vector,
             'translation_vector': translation_vector
         }
@@ -463,5 +473,4 @@ class GazeEstimator:
         # Draw head pose
         cv2.putText(frame_copy, f"Head Pose: P:{estimation.head_pitch:.1f} Y:{estimation.head_yaw:.1f} R:{estimation.head_roll:.1f}", 
                    (10, height - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-        
         return frame_copy

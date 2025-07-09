@@ -1,0 +1,16 @@
+INTERVIEW VIDEO ANALYSIS REPORT
+==================================================
+
+Session ID: video_test-video2_20250708_205636
+Video: test-video2.mp4
+Duration: 5.9 seconds
+Frames Analyzed: 225
+Detection Rate: 100.0%
+
+BEHAVIORAL METRICS
+------------------------------
+Total Blinks: 0
+Blink Rate: 0.0 per minute
+Average Attention Score: 0.81
+Suspicious Behaviors Detected: 0
+

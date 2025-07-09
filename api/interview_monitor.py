@@ -2,13 +2,13 @@
 Interview Monitor API
 
 Main API interface for the eye tracking system.
-Provides high-level methods for interview monitoring and analysis.
+Supports both real-time and video file processing.
 """
 
 import logging
 import time
 import threading
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Union
 from dataclasses import dataclass, field
 from pathlib import Path
 import json
@@ -20,7 +20,7 @@ import numpy as np
 from config.settings import Config, get_config
 from core.mediapipe_processor import MediaPipeProcessor
 from core.gaze_estimator import GazeEstimator, GazeEstimation
-from utils.camera_manager import CameraManager
+from utils.video_processor import VideoProcessor, VideoInfo
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ class MonitoringSession:
     session_id: str
     start_time: float
     end_time: Optional[float] = None
+    video_info: Optional[VideoInfo] = None  # For video processing
     
     # Metrics
     total_frames: int = 0
@@ -87,11 +88,7 @@ class InterviewMonitor:
     """
     Main API class for interview monitoring.
     
-    Provides high-level interface for:
-    - Starting/stopping monitoring sessions
-    - Real-time gaze tracking
-    - Behavioral analysis
-    - Data logging and export
+    Supports both video file processing and real-time monitoring.
     """
     
     def __init__(self, config: Optional[Config] = None):
@@ -99,7 +96,7 @@ class InterviewMonitor:
         self.config = config or get_config()
         
         # Core components
-        self.camera_manager = CameraManager(self.config)
+        self.video_processor = VideoProcessor(self.config)
         self.mediapipe_processor = MediaPipeProcessor(self.config)
         self.gaze_estimator = GazeEstimator(self.config)
         
@@ -107,45 +104,44 @@ class InterviewMonitor:
         self.state = MonitoringState.IDLE
         self.current_session: Optional[MonitoringSession] = None
         
-        # Threading
-        self.monitoring_thread: Optional[threading.Thread] = None
-        self.stop_event = threading.Event()
-        
         # Callbacks
         self.callbacks: Dict[str, List[Callable]] = {
-            'on_frame': [],
-            'on_gaze': [],
+            'on_state_change': [],
+            'on_detection': [],
             'on_blink': [],
-            'on_suspicious_behavior': [],
-            'on_error': []
+            'on_attention_change': [],
+            'on_suspicious_behavior': []
         }
         
         # Data logging
         self.log_file: Optional[Any] = None
         self.csv_writer: Optional[csv.DictWriter] = None
         
-        logger.info("Interview monitor initialized")
+        logger.info("Interview monitor initialized for video processing")
     
-    def start_monitoring(self, session_id: Optional[str] = None) -> str:
+    def process_video(self, video_path: Union[str, Path], 
+                     output_path: Optional[Path] = None,
+                     skip_frames: int = 0,
+                     session_id: Optional[str] = None) -> MonitoringSession:
         """
-        Start a new monitoring session.
+        Process a video file for gaze tracking analysis.
         
         Args:
+            video_path: Path to input video file
+            output_path: Optional path for output video with annotations
+            skip_frames: Process every Nth frame (0 = process all)
             session_id: Optional session identifier
             
         Returns:
-            Session ID
+            MonitoringSession with results
         """
-        if self.state == MonitoringState.RUNNING:
-            raise RuntimeError("Monitoring already in progress")
-        
-        self.state = MonitoringState.INITIALIZING
+        video_path = Path(video_path)
         
         # Generate session ID if not provided
         if session_id is None:
-            session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            session_id = f"video_{video_path.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        # Create new session
+        # Create session
         self.current_session = MonitoringSession(
             session_id=session_id,
             start_time=time.time()
@@ -155,114 +151,94 @@ class InterviewMonitor:
         if self.config.data_logging.enable_logging:
             self._init_data_logging()
         
-        # Start camera capture
-        self.camera_manager.start_capture()
-        
-        # Start monitoring thread
-        self.stop_event.clear()
-        self.monitoring_thread = threading.Thread(
-            target=self._monitoring_loop,
-            daemon=True
-        )
-        self.monitoring_thread.start()
-        
-        self.state = MonitoringState.RUNNING
-        logger.info(f"Started monitoring session: {session_id}")
-        
-        return session_id
-    
-    def stop_monitoring(self) -> Optional[MonitoringSession]:
-        """
-        Stop the current monitoring session.
-        
-        Returns:
-            Completed session data
-        """
-        if self.state != MonitoringState.RUNNING:
-            logger.warning("No active monitoring session to stop")
-            return None
-        
-        # Signal stop
-        self.stop_event.set()
-        
-        # Wait for thread to finish
-        if self.monitoring_thread:
-            self.monitoring_thread.join(timeout=5.0)
-        
-        # Stop camera
-        self.camera_manager.stop_capture()
-        
-        # Close logging
-        if self.log_file:
-            self.log_file.close()
-            self.log_file = None
-        
-        # Finalize session
-        if self.current_session:
-            self.current_session.end_time = time.time()
-            session = self.current_session
-            self.current_session = None
-            
-            # Save session summary
-            self._save_session_summary(session)
-            
-            logger.info(f"Stopped monitoring session: {session.session_id}")
-            return session
-        
-        self.state = MonitoringState.STOPPED
-        return None
-    
-    def pause_monitoring(self):
-        """Pause monitoring (keeps session active)"""
-        if self.state == MonitoringState.RUNNING:
-            self.state = MonitoringState.PAUSED
-            logger.info("Monitoring paused")
-    
-    def resume_monitoring(self):
-        """Resume paused monitoring"""
-        if self.state == MonitoringState.PAUSED:
-            self.state = MonitoringState.RUNNING
-            logger.info("Monitoring resumed")
-    
-    def _monitoring_loop(self):
-        """Main monitoring loop (runs in separate thread)"""
-        logger.debug("Monitoring loop started")
-        
         try:
-            while not self.stop_event.is_set():
-                if self.state != MonitoringState.RUNNING:
-                    time.sleep(0.1)
-                    continue
-                
-                # Get frame
-                frame_data = self.camera_manager.get_frame(timeout=0.1)
-                if frame_data is None:
-                    continue
-                
-                frame, timestamp = frame_data
+            # Load video
+            video_info = self.video_processor.load_video(video_path)
+            self.current_session.video_info = video_info
+            
+            logger.info(f"Processing video: {video_info}")
+            
+            # Create output video writer if requested
+            video_writer = None
+            if output_path:
+                video_writer = self.video_processor.create_output_video(output_path)
+            
+            # Process frames
+            for frame, frame_idx, timestamp in self.video_processor.process_frames(skip_frames):
                 self.current_session.total_frames += 1
                 
                 # Process frame
-                self._process_frame(frame, timestamp)
+                processed_frame = self._process_frame(frame, timestamp)
                 
-        except Exception as e:
-            logger.error(f"Error in monitoring loop: {e}", exc_info=True)
-            self.state = MonitoringState.ERROR
-            self._trigger_callbacks('on_error', error=str(e))
+                # Write annotated frame if output requested
+                if video_writer and processed_frame is not None:
+                    video_writer.write(processed_frame)
+                
+                # Log progress periodically
+                if frame_idx % 100 == 0:
+                    progress = self.video_processor.get_progress()
+                    logger.info(f"Progress: {progress:.1%} ({frame_idx}/{video_info.total_frames})")
+            
+            # Cleanup
+            if video_writer:
+                video_writer.release()
+            
+        finally:
+            # Finalize session
+            self.current_session.end_time = time.time()
+            self._save_session_summary(self.current_session)
+            
+            # Close logging
+            if self.log_file:
+                self.log_file.close()
+                self.log_file = None
+            
+            self.video_processor.release()
         
-        logger.debug("Monitoring loop ended")
+        logger.info(f"Video processing complete: {self.current_session.session_id}")
+        return self.current_session
     
-    def _process_frame(self, frame: np.ndarray, timestamp: float):
-        """Process a single frame"""
-        # Trigger frame callback
-        self._trigger_callbacks('on_frame', frame=frame, timestamp=timestamp)
+    def process_video_batch(self, video_paths: List[Union[str, Path]], 
+                          output_dir: Optional[Path] = None,
+                          skip_frames: int = 0) -> Dict[str, MonitoringSession]:
+        """
+        Process multiple videos in batch.
         
+        Args:
+            video_paths: List of video file paths
+            output_dir: Directory for output videos (optional)
+            skip_frames: Process every Nth frame
+            
+        Returns:
+            Dictionary mapping video names to sessions
+        """
+        results = {}
+        
+        for video_path in video_paths:
+            video_path = Path(video_path)
+            output_path = None
+            
+            if output_dir:
+                output_dir = Path(output_dir)
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = output_dir / f"{video_path.stem}_tracked{video_path.suffix}"
+            
+            try:
+                session = self.process_video(video_path, output_path, skip_frames)
+                results[video_path.name] = session
+            except Exception as e:
+                logger.error(f"Error processing {video_path}: {e}")
+                results[video_path.name] = None
+        
+        return results
+    
+    def _process_frame(self, frame: np.ndarray, timestamp: float) -> Optional[np.ndarray]:
+        """Process a single frame and return annotated version"""
         # Detect face landmarks
         face_landmarks = self.mediapipe_processor.process_frame(frame)
         
         if face_landmarks is None:
-            # No face detected
-            return
+            return frame
         
         self.current_session.successful_detections += 1
         
@@ -273,34 +249,34 @@ class InterviewMonitor:
         )
         
         if gaze_estimation is None:
-            return
+            return frame
         
         # Update blink count
         if gaze_estimation.is_blinking:
             self.current_session.total_blinks += 1
-            self._trigger_callbacks('on_blink', timestamp=timestamp)
-        
-        # Trigger gaze callback
-        self._trigger_callbacks('on_gaze', 
-                              gaze=gaze_estimation, 
-                              frame=frame)
         
         # Log data
         if self.config.data_logging.enable_logging:
             self._log_gaze_data(gaze_estimation)
         
-        # Store in session (sample to avoid memory issues)
-        if len(self.current_session.gaze_data) < 1000 or \
-           len(self.current_session.gaze_data) % 10 == 0:
+        # Store sample data
+        if len(self.current_session.gaze_data) < 10000:  # Limit memory usage
             self.current_session.gaze_data.append({
-                'timestamp': gaze_estimation.timestamp,
+                'timestamp': timestamp,
                 'screen_x': gaze_estimation.screen_point[0],
                 'screen_y': gaze_estimation.screen_point[1],
                 'confidence': gaze_estimation.tracking_confidence
             })
         
-        # Basic attention analysis (Phase 1)
+        # Analyze attention
         self._analyze_attention(gaze_estimation)
+        
+        # Draw visualization if enabled
+        if self.config.system.show_visualization:
+            annotated_frame = self.gaze_estimator.draw_gaze(frame, gaze_estimation)
+            return annotated_frame
+        
+        return frame
     
     def _analyze_attention(self, gaze: GazeEstimation):
         """Basic attention analysis"""
@@ -443,7 +419,6 @@ class InterviewMonitor:
             'blink_rate': self.current_session.total_blinks / max(1, self.current_session.get_duration() / 60),
             'attention_score': self.current_session.attention_score,
             'suspicious_behaviors': len(self.current_session.suspicious_behaviors),
-            'camera_stats': self.camera_manager.get_performance_stats(),
             'mediapipe_stats': self.mediapipe_processor.get_performance_stats()
         }
     
@@ -466,10 +441,9 @@ class InterviewMonitor:
         """Clean up resources"""
         # Stop monitoring if active
         if self.state == MonitoringState.RUNNING:
-            self.stop_monitoring()
+            self.state = MonitoringState.STOPPED
         
         # Close components
-        self.camera_manager.release()
         self.mediapipe_processor.close()
         
         logger.info("Interview monitor closed")

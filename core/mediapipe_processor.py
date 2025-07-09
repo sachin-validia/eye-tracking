@@ -109,7 +109,7 @@ class MediaPipeProcessor:
         self.avg_process_time = 0.0
         self.detection_success_rate = 0.0
         
-        logger.info(f"MediaPipe processor initialized with mode: {self.config.system.performance_mode.value}")
+        logger.info(f"MediaPipe processor initialized with mode: {self.config.system.performance_mode}")
     
     def process_frame(self, frame: np.ndarray) -> Optional[FaceLandmarks]:
         """

@@ -1,6 +1,6 @@
 # Eye Tracking System
 
-A production-ready eye tracking system for interview monitoring and behavioral analysis. Built with MediaPipe, OpenCV, and GazeTracking for accurate, real-time gaze estimation.
+A production-ready eye tracking system for interview monitoring and behavioral analysis. Built with MediaPipe, OpenCV, and GazeTracking for accurate gaze estimation. **Now supports both real-time and video file processing.**
 
 ## Features (Phase 1 - Current Implementation)
 
@@ -66,17 +66,7 @@ cd eye-tracking-system
 ```bash
 python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install HDF5 development libraries (required for h5py)
-sudo apt install libhdf5-dev libhdf5-serial-dev pkg-config
-
 ```
-
-# Install build tools and development libraries (required for dlib compilation)
-sudo apt install cmake build-essential
-sudo apt install libopencv-dev python3-opencv
-sudo apt install libboost-all-dev
-
 
 3. **Install dependencies:**
 ```bash
@@ -106,43 +96,27 @@ pip install -e .
 
 ## Quick Start
 
-### Basic Usage
+## Quick Start - Video Processing
 
-```python
-from eye_tracking_system import InterviewMonitor, Config
-
-# Create configuration
-config = Config()
-config.system.performance_mode = "balanced"
-
-# Initialize monitor
-monitor = InterviewMonitor(config)
-
-# Start monitoring
-session_id = monitor.start_monitoring()
-print(f"Started session: {session_id}")
-
-# Run for some time...
-import time
-time.sleep(30)
-
-# Stop and get results
-session = monitor.stop_monitoring()
-print(f"Detection rate: {session.get_detection_rate():.1%}")
-```
-
-### Run the Demo
-
+### Process Interview Videos
 ```bash
-# Basic demo
-python examples/basic_gaze_tracking.py
+# Basic video analysis
+python analyze_interview_videos.py interview_video.mp4
 
-# With options
-python examples/basic_gaze_tracking.py --mode high_accuracy --camera 0 --resolution 1280x720
+# With annotated output video
+python analyze_interview_videos.py interview_video.mp4 --annotate
 
-# List available cameras
-python examples/basic_gaze_tracking.py --list-cameras
+# Process every 5th frame (faster)
+python analyze_interview_videos.py interview_video.mp4 --skip-frames 4
 ```
+
+### Batch Process Videos
+```bash
+# Process all videos in a directory
+python examples/video_processing.py ./videos/ --batch -o ./results/
+```
+
+See [VIDEO_PROCESSING_GUIDE.md](VIDEO_PROCESSING_GUIDE.md) for detailed usage.
 
 ## Configuration
 
@@ -365,10 +339,4 @@ pip install mediapipe==0.10.21
 - Reduce resolution
 - Disable debug visualization
 - Use performance mode
-
-## Acknowledgments
-
-- MediaPipe by Google
-- GazeTracking by Antoine Lamé
-- OpenCV community
 

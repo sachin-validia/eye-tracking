@@ -308,10 +308,10 @@ class Config:
         return {
             'mode': mode.value,
             'expected_fps': {
-                PerformanceMode.HIGH_ACCURACY: 15-20,
-                PerformanceMode.BALANCED: 25-30,
-                PerformanceMode.HIGH_SPEED: 30-40,
-                PerformanceMode.ULTRA_LOW_LATENCY: 40-60
+                PerformanceMode.HIGH_ACCURACY: 17,
+                PerformanceMode.BALANCED: 27,
+                PerformanceMode.HIGH_SPEED: 35,
+                PerformanceMode.ULTRA_LOW_LATENCY: 50
             }.get(mode, 30),
             'accuracy_level': {
                 PerformanceMode.HIGH_ACCURACY: 'high',
